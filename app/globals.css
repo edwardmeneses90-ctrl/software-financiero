@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+@theme {
+  /* 
+   * TEMA LIGHT PREMIUM: Blancos, cremas y grises suaves
+   * Regla v4: --color-NOMBRE → genera bg-NOMBRE, text-NOMBRE, etc.
+   */
+  
+  /* Fondo y superficies */
+  --color-background: #fafafa;        /* Blanco hueso muy suave */
+  --color-surface: #ffffff;           /* Blanco puro para tarjetas */
+  --color-surface-light: #f4f4f5;     /* Gris perla para hover/alternos */
+  
+  /* Texto (oscuro para contraste sobre fondo claro) */
+  --color-primary: #18181b;           /* Casi negro, suave a la vista */
+  --color-secondary: #52525b;         /* Gris medio para textos secundarios */
+  --color-muted: #a1a1aa;             /* Gris claro para placeholders */
+  
+  /* Finanzas (tonos vibrantes pero elegantes) */
+  --color-income: #059669;            /* Verde esmeralda profesional */
+  --color-expense: #dc2626;           /* Rojo cereza, claro pero legible */
+  --color-accent: #7c3aed;            /* Violeta premium para acentos */
+  
+  /* UI y bordes */
+  --color-border: #e4e4e7;            /* Gris muy suave para bordes */
+  --color-glass: rgba(255, 255, 255, 0.6); /* Glass ligero para light mode */
+  
+  /* Tipografía */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  
+  /* Border radius */
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  
+  /* Sombras (más sutiles para light mode) */
+  --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.06);
+  --shadow-glow: 0 0 25px rgba(124, 58, 237, 0.15);
+}
+
+/* Variables CSS para uso en JavaScript/React */
+:root {
+  --background: #fafafa;
+  --surface: #ffffff;
+  --primary: #18181b;
+  --secondary: #52525b;
+  --income: #059669;
+  --expense: #dc2626;
+  --accent: #7c3aed;
+  --border: #e4e4e7;
+  --glass-bg: rgba(255, 255, 255, 0.6);
+}
+
+body {
+  @apply bg-background text-primary antialiased;
+  font-family: var(--font-sans);
+}
+
+/* Utilidad glassmorphism para modo claro */
+.glass {
+  @apply bg-glass backdrop-blur-md border border-border shadow-soft;
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.95) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.modal-animate {
+  animation: modalIn 0.2s ease-out forwards;
+}
+
+/* Optimizaciones Mobile & UX */
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  @apply min-h-screen overflow-x-hidden;
+  overscroll-behavior: none; /* Evita el "bounce" en Safari/iOS */
+}
+/* Evitar zoom automático en iOS al tocar inputs */
+input, select, textarea {
+  font-size: 16px !important;
+}
+/* Mejorar touch targets en móvil */
+button, [role="button"], .cursor-pointer {
+  min-height: 44px;
+  min-width: 44px;
+}
+/* Scrollbar sutil para listas */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 10px;
+}
