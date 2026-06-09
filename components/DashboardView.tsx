@@ -12,7 +12,7 @@ interface DashboardProps {
     income: number;
     expense: number;
     available: number;
-    weekly: { income: number; expense: number; balance: number }[];
+    weekly: { income: number; expense: number; previousBalance: number; balance: number }[];
     isLoading: boolean;
     transactions: { date: string; category: string; type: string; amount: number; icon: string }[];
   };
@@ -57,21 +57,17 @@ export default function DashboardView({ month, year, data, onRefresh, lastSynced
     }
   };
 
-  // NUEVO: Detectar la semana crítica (menor balance o mayor gasto si no hay ingresos)
   const getCriticalWeek = () => {
     if (data.weekly.length === 0) return -1;
-    
-    const weekWithActivity = data.weekly.map((w, i) => ({ ...w, idx: i })).filter(w => w.income > 0 || w.expense > 0);
+    const weekWithActivity = data.weekly.map((w, i) => ({ ...w, idx: i })).filter(w => w.income > 0 || w.expense > 0 || w.previousBalance !== 0);
     if (weekWithActivity.length === 0) return -1;
 
-    // Prioridad 1: Semana con menor balance (más negativa)
     const lowestBalance = Math.min(...weekWithActivity.map(w => w.balance));
     const criticalByBalance = weekWithActivity.filter(w => w.balance === lowestBalance);
     if (lowestBalance < 0 || criticalByBalance.length > 0) {
       return criticalByBalance[0].idx;
     }
 
-    // Prioridad 2: Semana con mayor gasto
     const highestExpense = Math.max(...weekWithActivity.map(w => w.expense));
     const criticalByExpense = weekWithActivity.filter(w => w.expense === highestExpense);
     return criticalByExpense[0].idx;
@@ -121,7 +117,6 @@ export default function DashboardView({ month, year, data, onRefresh, lastSynced
         </div>
       ) : (
         <>
-          {/* Alertas Inteligentes */}
           <SmartAlerts year={year} month={month} />
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -144,7 +139,7 @@ export default function DashboardView({ month, year, data, onRefresh, lastSynced
 
           <div className="space-y-4">
             <h3 className="text-xl font-semibold text-primary text-center flex items-center justify-center gap-2">
-              📅 Análisis Semanal Automático
+              📅 Análisis Semanal Acumulativo
               {criticalWeekIdx >= 0 && (
                 <span className="text-xs bg-expense/10 text-expense px-2 py-1 rounded-full font-medium">
                   ⚠️ Semana {criticalWeekIdx + 1} es la más crítica
@@ -154,16 +149,14 @@ export default function DashboardView({ month, year, data, onRefresh, lastSynced
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {data.weekly.map((week, i) => {
                 const isCritical = i === criticalWeekIdx;
-                const hasActivity = week.income > 0 || week.expense > 0;
+                const hasActivity = week.income > 0 || week.expense > 0 || week.previousBalance !== 0;
                 const isDeficit = week.balance < 0;
                 
                 return (
                   <div 
                     key={i} 
                     className={`glass rounded-2xl p-4 shadow-soft transition-all duration-300 ${
-                      isCritical 
-                        ? "ring-2 ring-expense/50 scale-[1.02] bg-expense/5" 
-                        : "hover:scale-[1.02]"
+                      isCritical ? "ring-2 ring-expense/50 scale-[1.02] bg-expense/5" : "hover:scale-[1.02]"
                     }`}
                   >
                     <div className="flex justify-between items-center mb-3">
@@ -178,36 +171,30 @@ export default function DashboardView({ month, year, data, onRefresh, lastSynced
                       )}
                     </div>
 
-                    {/* Mini barras visuales */}
                     {hasActivity && (
-                      <div className="space-y-2 mb-3">
-                        <div className="flex justify-between text-xs">
-                          <span className="text-muted">Ingresos</span>
+                      <div className="space-y-2 mb-3 text-xs">
+                        {/* NUEVO: Mostrar arrastre si existe */}
+                        {week.previousBalance !== 0 && (
+                          <div className="flex justify-between text-muted/80 border-b border-border/30 pb-1 mb-1">
+                            <span>Arrastre (Disponible):</span>
+                            <span className="font-medium text-primary">{fmt(week.previousBalance)}</span>
+                          </div>
+                        )}
+                        
+                        <div className="flex justify-between">
+                          <span className="text-muted">Ingresos:</span>
                           <span className="text-income font-medium">{fmt(week.income)}</span>
                         </div>
-                        <div className="w-full bg-surface-light h-1.5 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-gradient-to-r from-income to-income/70 rounded-full transition-all duration-700"
-                            style={{ width: `${Math.min((week.income / Math.max(week.income, week.expense, 1)) * 100, 100)}%` }}
-                          />
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className="text-muted">Egresos</span>
-                          <span className="text-expense font-medium">{fmt(week.expense)}</span>
-                        </div>
-                        <div className="w-full bg-surface-light h-1.5 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-gradient-to-r from-expense to-expense/70 rounded-full transition-all duration-700"
-                            style={{ width: `${Math.min((week.expense / Math.max(week.income, week.expense, 1)) * 100, 100)}%` }}
-                          />
+                        <div className="flex justify-between">
+                          <span className="text-muted">Egresos:</span>
+                          <span className="text-expense font-medium">-{fmt(week.expense)}</span>
                         </div>
                       </div>
                     )}
 
-                    {/* Balance final */}
                     <div className="pt-3 border-t border-border/50">
                       <div className="flex justify-between items-center">
-                        <span className="text-xs text-muted">Balance</span>
+                        <span className="text-xs font-semibold text-primary">Balance Final:</span>
                         <span className={`text-lg font-bold ${
                           !hasActivity ? "text-muted" :
                           week.balance > 0 ? "text-income" :

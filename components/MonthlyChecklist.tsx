@@ -83,15 +83,14 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
       .from("checklist_items")
       .select("*")
       .eq("year", year)
-      .eq("month", month)
-      .order("type", { ascending: true })
-      .order("title", { ascending: true });
+      .eq("month", month);
 
     if (error) {
       console.error("Error cargando checklist:", error);
     } else {
       const itemsWithProgress = await calculateProgress(itemsData || []);
-      setItems(itemsWithProgress);
+      const sortedItems = sortItemsByPriority(itemsWithProgress);
+      setItems(sortedItems);
     }
     setIsLoading(false);
   };
@@ -105,30 +104,64 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
     return () => { cancelled = true; };
   }, [year, month]);
 
-  const calculateProgress = async (items: CheckItem[]): Promise<CheckItem[]> => {
+  // --- LÓGICA DUAL INTELIGENTE ---
+    const calculateProgress = async (items: CheckItem[]): Promise<CheckItem[]> => {
+    console.log("🚀 [SISTEMA ACTIVO] Buscando acumulados con fechas blindadas...");
+    
     const itemsWithProgress = await Promise.all(
       items.map(async (item) => {
         if (!item.category || !item.week_number || item.is_completed) {
           return { ...item, paid_amount: 0 };
         }
 
-        const weekRange = getWeekDateRange(item.week_number, year, month);
-        
-        const { data: transactions } = await supabase
-          .from("transactions")
-          .select("amount, date")
-          .eq("category", item.category)
-          .eq("type", item.type)
-          .gte("date", weekRange.start)
-          .lte("date", weekRange.end);
+        // Limpiamos la categoría (quitamos emojis) para que la búsqueda sea flexible
+        const cleanCategory = item.category
+          .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "")
+          .trim();
 
-        const paidAmount = transactions?.reduce((sum, t) => sum + t.amount, 0) || 0;
-        
+        let startDate: string;
+        let endDate: string;
+
+        // 1. PARA INGRESOS: Buscamos en TODO EL MES (fechas blindadas, nunca dará 31 en junio)
+        if (item.type === "income") {
+          const monthStr = month.toString().padStart(2, '0');
+          // Esta fórmula matemática SIEMPRE devuelve el último día real del mes (28, 29, 30 o 31)
+          const lastDay = new Date(year, month, 0).getDate(); 
+          startDate = `${year}-${monthStr}-01`;
+          endDate = `${year}-${monthStr}-${lastDay}`;
+        } 
+        // 2. PARA EGRESOS: Buscamos SOLO EN LA SEMANA ESPECÍFICA
+        else {
+          const weekStartDate = new Date(year, month - 1, (item.week_number - 1) * 7 + 1);
+          const weekEndDate = new Date(year, month - 1, item.week_number * 7);
+          const lastDayOfMonth = new Date(year, month, 0).getDate();
+          if (weekEndDate.getDate() > lastDayOfMonth) {
+            weekEndDate.setDate(lastDayOfMonth);
+          }
+          startDate = weekStartDate.toISOString().split('T')[0];
+          endDate = weekEndDate.toISOString().split('T')[0];
+        }
+
+        console.log(`🔍 Buscando "${item.title}" | Categoría: "${cleanCategory}" | Fechas: ${startDate} a ${endDate}`);
+
+        const { data: transactions, error } = await supabase
+          .from("transactions")
+          .select("amount, date, category, type")
+          .ilike("category", `%${cleanCategory}%`)
+          .eq("type", item.type)
+          .gte("date", startDate)
+          .lte("date", endDate);
+
+        if (error) {
+          console.error(`❌ Error en consulta para "${item.title}":`, error);
+          return { ...item, paid_amount: 0 };
+        }
+
+        const paidAmount = transactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+        console.log(`✅ "${item.title}": Encontradas ${transactions?.length || 0} transacciones. Acumulado: $${paidAmount}`);
+
         if (paidAmount >= item.amount && !item.is_completed) {
-          await supabase
-            .from("checklist_items")
-            .update({ is_completed: true })
-            .eq("id", item.id);
+          await supabase.from("checklist_items").update({ is_completed: true }).eq("id", item.id);
           return { ...item, paid_amount: paidAmount, is_completed: true };
         }
 
@@ -149,14 +182,18 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
     if (isReadOnly) return;
     const { error } = await supabase.from("checklist_items").update({ is_completed: !current }).eq("id", id);
     if (!error) {
-      setItems(prev => prev.map(i => i.id === id ? { ...i, is_completed: !current } : i));
+      const updatedItems = items.map(i => i.id === id ? { ...i, is_completed: !current } : i);
+      setItems(sortItemsByPriority(updatedItems));
     }
   };
 
   const deleteItem = async (id: string) => {
     if (isReadOnly || !window.confirm("¿Eliminar este ítem?")) return;
     const { error } = await supabase.from("checklist_items").delete().eq("id", id);
-    if (!error) setItems(prev => prev.filter(i => i.id !== id));
+    if (!error) {
+      const updatedItems = items.filter(i => i.id !== id);
+      setItems(sortItemsByPriority(updatedItems));
+    }
   };
 
   const handleAddItem = async () => {
@@ -209,17 +246,19 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
     }
   };
 
-  const sortItemsByPriority = (items: CheckItem[]) => {
+  const sortItemsByPriority = (itemsToSort: CheckItem[]) => {
     const today = new Date().toISOString().split('T')[0];
     
-    return [...items].sort((a, b) => {
+    return [...itemsToSort].sort((a, b) => {
+      if (a.is_completed && !b.is_completed) return 1;
+      if (!a.is_completed && b.is_completed) return -1;
+
       if (!a.due_date && !b.due_date) return 0;
       if (!a.due_date) return 1;
       if (!b.due_date) return -1;
 
-      const aOverdue = a.due_date < today && !a.is_completed;
-      const bOverdue = b.due_date < today && !b.is_completed;
-
+      const aOverdue = a.due_date < today;
+      const bOverdue = b.due_date < today;
       if (aOverdue && !bOverdue) return -1;
       if (!aOverdue && bOverdue) return 1;
 
@@ -229,15 +268,15 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
 
   const incomes = sortItemsByPriority(items.filter(i => i.type === "income"));
   const expenses = sortItemsByPriority(items.filter(i => i.type === "expense"));
+  
   const totalIncome = incomes.reduce((sum, i) => sum + i.amount, 0);
   const totalExpense = expenses.reduce((sum, i) => sum + i.amount, 0);
   const completedIncome = incomes.filter(i => i.is_completed).reduce((s, i) => s + i.amount, 0);
   const completedExp = expenses.filter(i => i.is_completed).reduce((s, i) => s + i.amount, 0);
   const progress = totalExpense > 0 ? Math.round((completedExp / totalExpense) * 100) : 0;
 
-  const filteredCategories = categories.filter(c => c.type === formType);
+  const filteredCategories = categories;
 
-  // NUEVO: Textos dinámicos según el tipo
   const getDateLabel = (type: "income" | "expense") => type === "income" ? "Fecha de cobro" : "Fecha de vencimiento";
   const getPaidLabel = (type: "income" | "expense") => type === "income" ? "Cobrado" : "Pagado";
   const getMissingLabel = (type: "income" | "expense") => type === "income" ? "Falta por cobrar" : "Falta";
@@ -283,7 +322,6 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
         </div>
       ) : (
         <>
-          {/* NUEVO: Progreso general ahora incluye ingresos y egresos */}
           <div className="glass rounded-xl p-4 space-y-2">
             <div className="flex justify-between text-sm"><span className="text-secondary">Progreso de pagos (egresos)</span><span className="font-medium text-primary">{progress}%</span></div>
             <div className="w-full bg-surface-light h-2 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-income to-accent transition-all duration-500" style={{ width: `${progress}%` }} /></div>
@@ -300,7 +338,7 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
                 
                 return (
                   <div key={item.id} className={`p-3 rounded-xl border transition-all ${
-                    item.is_completed ? "bg-income/10 border-income/30" : 
+                    item.is_completed ? "bg-income/10 border-income/30 opacity-70" : 
                     isOverdue ? "bg-expense/5 border-expense/40" : 
                     "bg-surface border-border"
                   }`}>
@@ -317,8 +355,10 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
                           <span className={`font-medium ${item.is_completed ? "text-income line-through opacity-80" : "text-primary"}`}>
                             {item.title}
                           </span>
-                          {item.category && (
+                          {item.category ? (
                             <div className="text-xs text-muted mt-0.5">📁 {item.category}</div>
+                          ) : (
+                            <div className="text-xs text-expense mt-0.5">⚠️ Sin categoría (no se puede rastrear)</div>
                           )}
                           {item.due_date && (
                             <div className={`text-xs mt-0.5 ${isOverdue ? "text-expense font-medium" : "text-muted"}`}>
@@ -374,7 +414,7 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
                 
                 return (
                   <div key={item.id} className={`p-3 rounded-xl border transition-all ${
-                    item.is_completed ? "bg-expense/10 border-expense/30" : 
+                    item.is_completed ? "bg-expense/10 border-expense/30 opacity-70" : 
                     isOverdue ? "bg-expense/5 border-expense/40" : 
                     "bg-surface border-border"
                   }`}>
@@ -391,8 +431,10 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
                           <span className={`font-medium ${item.is_completed ? "text-expense line-through opacity-80" : "text-primary"}`}>
                             {item.title}
                           </span>
-                          {item.category && (
+                          {item.category ? (
                             <div className="text-xs text-muted mt-0.5">📁 {item.category}</div>
+                          ) : (
+                            <div className="text-xs text-expense mt-0.5">⚠️ Sin categoría (no se puede rastrear)</div>
                           )}
                           {item.due_date && (
                             <div className={`text-xs mt-0.5 ${isOverdue ? "text-expense font-medium" : "text-muted"}`}>
@@ -457,16 +499,22 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
                 <span className="text-primary font-semibold mr-1 select-none">$</span>
                 <input type="text" inputMode="decimal" value={formAmount} onChange={e => setFormAmount(e.target.value.replace(/[^\d.,]/g, ""))} placeholder="0" className="w-full bg-transparent text-primary outline-none" />
               </div>
-              {filteredCategories.length > 0 && (
-                <select value={formCategory} onChange={e => setFormCategory(e.target.value)} className="w-full bg-surface-light border border-border rounded-xl px-4 py-3 text-primary focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition">
-                  <option value="">Sin categoría (opcional)</option>
-                  {filteredCategories.map(cat => (
+              
+              <select value={formCategory} onChange={e => setFormCategory(e.target.value)} className="w-full bg-surface-light border border-border rounded-xl px-4 py-3 text-primary focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 transition">
+                <option value="">Sin categoría (opcional)</option>
+                {filteredCategories.length > 0 ? (
+                  filteredCategories.map(cat => (
                     <option key={cat.id} value={cat.name}>{cat.icon} {cat.name}</option>
-                  ))}
-                </select>
+                  ))
+                ) : (
+                  <option disabled>No hay categorías creadas aún</option>
+                )}
+              </select>
+              {formCategory === "" && (
+                <p className="text-xs text-expense text-center animate-pulse font-medium">⚠️ Para que el acumulado funcione, DEBES seleccionar una categoría</p>
               )}
+
               <div>
-                {/* NUEVO: Etiqueta dinámica según el tipo */}
                 <label className="block text-sm text-secondary mb-1.5">
                   {getDateLabel(formType)}
                 </label>

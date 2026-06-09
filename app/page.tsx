@@ -39,11 +39,12 @@ export default function Home() {
 
   const [feedback, setFeedback] = useState<{ type: "success" | "error" | null, msg: string }>({ type: null, msg: "" });
 
+  // NUEVO: Agregamos previousBalance a la interfaz
   const [dashboardData, setDashboardData] = useState({
     income: 0, 
     expense: 0, 
     available: 0, 
-    weekly: [] as { income: number; expense: number; balance: number }[], 
+    weekly: [] as { income: number; expense: number; previousBalance: number; balance: number }[], 
     isLoading: false, 
     transactions: [] as any[]
   });
@@ -55,12 +56,13 @@ export default function Home() {
     if (txError) { console.error("Error cargando transacciones:", txError); setDashboardData(prev => ({ ...prev, isLoading: false })); return; }
 
     let income = 0, expense = 0;
-    // NUEVO: Estructura mejorada con ingresos, egresos y balance por semana
+    
+    // NUEVO: Estructura con previousBalance
     const weeklyStats = [
-      { income: 0, expense: 0, balance: 0 },
-      { income: 0, expense: 0, balance: 0 },
-      { income: 0, expense: 0, balance: 0 },
-      { income: 0, expense: 0, balance: 0 }
+      { income: 0, expense: 0, previousBalance: 0, balance: 0 },
+      { income: 0, expense: 0, previousBalance: 0, balance: 0 },
+      { income: 0, expense: 0, previousBalance: 0, balance: 0 },
+      { income: 0, expense: 0, previousBalance: 0, balance: 0 }
     ];
     
     const monthlyTx = (txData || []).filter(tx => {
@@ -83,9 +85,12 @@ export default function Home() {
       else weeklyStats[weekIdx].expense += amt;
     });
 
-    // Calcular balance por semana
+    // NUEVO: Cálculo acumulativo transparente
+    let runningBalance = 0;
     weeklyStats.forEach(week => {
-      week.balance = week.income - week.expense;
+      week.previousBalance = runningBalance; // Guardamos el arrastre ANTES de sumar/restar esta semana
+      runningBalance += (week.income - week.expense);
+      week.balance = runningBalance; // Este es el nuevo disponible
     });
 
     setDashboardData({ 
@@ -105,8 +110,12 @@ export default function Home() {
     let cancelled = false;
     const fetchCategories = async () => {
       setIsLoadingCategories(true);
-      const { data, error } = await supabase.from("categories").select("name, icon").eq("year", activeYear).eq("month", activeMonth).order("created_at", { ascending: true });
-      if (!cancelled) { if (error) console.error("Error cargando categorías:", error); else setCategories(data?.map((c) => ({ name: c.name, icon: c.icon || "📦" })) || []); setIsLoadingCategories(false); }
+      const { data, error } = await supabase.from("categories").select("name, icon, type").eq("year", activeYear).eq("month", activeMonth).order("created_at", { ascending: true });
+      if (!cancelled) { 
+        if (error) console.error("Error cargando categorías:", error); 
+        else setCategories(data?.map((c) => ({ name: c.name, icon: c.icon || "📦", type: c.type })) || []); 
+        setIsLoadingCategories(false); 
+      }
     };
     fetchCategories();
     return () => { cancelled = true; };
@@ -115,7 +124,7 @@ export default function Home() {
   const handleAddCategory = async (name: string, icon: string) => {
     if (isReadOnly || categories.some(c => c.name === name)) return;
     const { error } = await supabase.from("categories").insert({ name, icon, type: selectedType || "expense", year: activeYear, month: activeMonth });
-    if (!error) { setCategories(prev => [...prev, { name, icon }]); setSelectedCategory(name); }
+    if (!error) { setCategories(prev => [...prev, { name, icon, type: selectedType || "expense" }]); setSelectedCategory(name); }
   };
 
   const handleDeleteCategory = async (catToDelete: string) => {
