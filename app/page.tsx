@@ -40,9 +40,13 @@ export default function Home() {
   const [feedback, setFeedback] = useState<{ type: "success" | "error" | null, msg: string }>({ type: null, msg: "" });
 
   const [dashboardData, setDashboardData] = useState({
-    income: 0, expense: 0, available: 0, weekly: [] as { target: number; actual: number }[], isLoading: false, transactions: [] as any[]
+    income: 0, 
+    expense: 0, 
+    available: 0, 
+    weekly: [] as { income: number; expense: number; balance: number }[], 
+    isLoading: false, 
+    transactions: [] as any[]
   });
-  const [weeklyTargets, setWeeklyTargets] = useState<number[]>([0, 0, 0, 0]);
   const [lastSynced, setLastSynced] = useState<number | null>(null);
 
   const fetchDashboardData = useCallback(async () => {
@@ -51,7 +55,14 @@ export default function Home() {
     if (txError) { console.error("Error cargando transacciones:", txError); setDashboardData(prev => ({ ...prev, isLoading: false })); return; }
 
     let income = 0, expense = 0;
-    const weeklyActuals = [0, 0, 0, 0];
+    // NUEVO: Estructura mejorada con ingresos, egresos y balance por semana
+    const weeklyStats = [
+      { income: 0, expense: 0, balance: 0 },
+      { income: 0, expense: 0, balance: 0 },
+      { income: 0, expense: 0, balance: 0 },
+      { income: 0, expense: 0, balance: 0 }
+    ];
+    
     const monthlyTx = (txData || []).filter(tx => {
       const txDate = new Date(tx.date + "T00:00:00");
       return txDate.getFullYear() === activeYear && txDate.getMonth() + 1 === activeMonth;
@@ -62,18 +73,29 @@ export default function Home() {
 
     monthlyTx.forEach((tx) => {
       const amt = Number(tx.amount);
-      if (tx.type === "income") income += amt; else expense += amt;
+      if (tx.type === "income") income += amt; 
+      else expense += amt;
+      
       const day = new Date(tx.date + "T00:00:00").getDate();
       const weekIdx = Math.min(Math.floor((day - 1) / 7), 3);
-      if (tx.type === "expense") weeklyActuals[weekIdx] += amt;
+      
+      if (tx.type === "income") weeklyStats[weekIdx].income += amt;
+      else weeklyStats[weekIdx].expense += amt;
     });
 
-    const { data: targetData } = await supabase.from("weekly_targets").select("week, amount").eq("year", activeYear).eq("month", activeMonth);
-    const targets = [0, 0, 0, 0];
-    targetData?.forEach(t => { targets[t.week - 1] = Number(t.amount); });
-    setWeeklyTargets(targets);
+    // Calcular balance por semana
+    weeklyStats.forEach(week => {
+      week.balance = week.income - week.expense;
+    });
 
-    setDashboardData({ income, expense, available: income - expense, weekly: weeklyActuals.map((actual, i) => ({ target: targets[i], actual })), isLoading: false, transactions: monthlyTx });
+    setDashboardData({ 
+      income, 
+      expense, 
+      available: income - expense, 
+      weekly: weeklyStats, 
+      isLoading: false, 
+      transactions: monthlyTx 
+    });
     setLastSynced(Date.now());
   }, [activeYear, activeMonth, categories]);
 
@@ -126,14 +148,6 @@ export default function Home() {
     }
   };
 
-  const handleTargetChange = async (weekIdx: number, newAmount: number) => {
-    if (isReadOnly) return;
-    const newTargets = [...weeklyTargets];
-    newTargets[weekIdx] = newAmount;
-    setWeeklyTargets(newTargets);
-    await supabase.from("weekly_targets").upsert({ year: activeYear, month: activeMonth, week: weekIdx + 1, amount: newAmount }, { onConflict: "year,month,week" });
-  };
-
   return (
     <main className="min-h-screen bg-background p-4 sm:p-6 md:p-10 pb-24 sm:pb-10 transition-all duration-300 flex flex-col items-center">
       <AuthHeader />
@@ -179,7 +193,14 @@ export default function Home() {
         )}
 
         {view === "dashboard" && (
-          <DashboardView month={activeMonth} year={activeYear} data={dashboardData} targets={weeklyTargets} onTargetChange={handleTargetChange} onRefresh={fetchDashboardData} lastSynced={lastSynced} isReadOnly={isReadOnly} />
+          <DashboardView 
+            month={activeMonth} 
+            year={activeYear} 
+            data={dashboardData} 
+            onRefresh={fetchDashboardData} 
+            lastSynced={lastSynced} 
+            isReadOnly={isReadOnly} 
+          />
         )}
 
         {view === "checklist" && (

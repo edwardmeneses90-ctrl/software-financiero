@@ -3,6 +3,7 @@ import { useState } from "react";
 import { pdf } from "@react-pdf/renderer";
 import { PDFReport } from "./PDFReport";
 import WeeklyChart from "./WeeklyChart";
+import SmartAlerts from "./SmartAlerts";
 
 interface DashboardProps {
   month: number;
@@ -11,38 +12,20 @@ interface DashboardProps {
     income: number;
     expense: number;
     available: number;
-    weekly: { target: number; actual: number }[];
+    weekly: { income: number; expense: number; balance: number }[];
     isLoading: boolean;
     transactions: { date: string; category: string; type: string; amount: number; icon: string }[];
   };
-  targets: number[];
-  onTargetChange: (weekIdx: number, newAmount: number) => Promise<void>;
   onRefresh: () => Promise<void>;
   lastSynced: number | null;
   isReadOnly?: boolean;
 }
 
-export default function DashboardView({ month, year, data, targets, onTargetChange, onRefresh, lastSynced, isReadOnly = false }: DashboardProps) {
-  const [editingWeek, setEditingWeek] = useState<number | null>(null);
-  const [tempTarget, setTempTarget] = useState("");
+export default function DashboardView({ month, year, data, onRefresh, lastSynced, isReadOnly = false }: DashboardProps) {
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
   const fmt = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n);
   const months = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
-
-  const startEdit = (idx: number) => {
-    if (isReadOnly) return;
-    setEditingWeek(idx);
-    setTempTarget(targets[idx].toString().replace(/\./g, ""));
-  };
-
-  const saveTarget = () => {
-    if (editingWeek === null || isReadOnly) return;
-    const clean = tempTarget.replace(/\./g, "").replace(",", ".");
-    const num = parseFloat(clean);
-    if (!isNaN(num) && num >= 0) onTargetChange(editingWeek, num);
-    setEditingWeek(null);
-  };
 
   const getSyncText = () => {
     if (!lastSynced) return "Sin sincronizar";
@@ -74,6 +57,28 @@ export default function DashboardView({ month, year, data, targets, onTargetChan
     }
   };
 
+  // NUEVO: Detectar la semana crítica (menor balance o mayor gasto si no hay ingresos)
+  const getCriticalWeek = () => {
+    if (data.weekly.length === 0) return -1;
+    
+    const weekWithActivity = data.weekly.map((w, i) => ({ ...w, idx: i })).filter(w => w.income > 0 || w.expense > 0);
+    if (weekWithActivity.length === 0) return -1;
+
+    // Prioridad 1: Semana con menor balance (más negativa)
+    const lowestBalance = Math.min(...weekWithActivity.map(w => w.balance));
+    const criticalByBalance = weekWithActivity.filter(w => w.balance === lowestBalance);
+    if (lowestBalance < 0 || criticalByBalance.length > 0) {
+      return criticalByBalance[0].idx;
+    }
+
+    // Prioridad 2: Semana con mayor gasto
+    const highestExpense = Math.max(...weekWithActivity.map(w => w.expense));
+    const criticalByExpense = weekWithActivity.filter(w => w.expense === highestExpense);
+    return criticalByExpense[0].idx;
+  };
+
+  const criticalWeekIdx = getCriticalWeek();
+
   if (data.isLoading) {
     return (
       <div className="w-full max-w-5xl mx-auto flex flex-col items-center justify-center min-h-[400px] gap-4">
@@ -92,7 +97,7 @@ export default function DashboardView({ month, year, data, targets, onTargetChan
           <h2 className="text-3xl sm:text-4xl font-bold text-primary tracking-tight">
             📊 Control {month.toString().padStart(2, "0")}/{year}
           </h2>
-          <p className="text-secondary text-sm sm:text-base">Tus metas semanales vs gasto real</p>
+          <p className="text-secondary text-sm sm:text-base">Análisis automático de tus finanzas</p>
         </div>
         <div className="flex items-center gap-3">
           <button onClick={handleDownloadPDF} disabled={isGeneratingPdf || isEmpty} className="p-2 rounded-xl bg-surface border border-border text-secondary hover:text-accent hover:border-accent/40 transition-all disabled:opacity-50" title="Descargar PDF">
@@ -116,6 +121,9 @@ export default function DashboardView({ month, year, data, targets, onTargetChan
         </div>
       ) : (
         <>
+          {/* Alertas Inteligentes */}
+          <SmartAlerts year={year} month={month} />
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {[
               { label: "Ingresos", value: data.income, colorClass: "text-income", icon: "📈" },
@@ -132,44 +140,82 @@ export default function DashboardView({ month, year, data, targets, onTargetChan
             ))}
           </div>
 
-          <WeeklyChart weeklyData={data.weekly} fmt={fmt} />
+          <WeeklyChart weeklyData={data.weekly.map(w => ({ target: 0, actual: w.expense }))} fmt={fmt} />
 
           <div className="space-y-4">
-            <h3 className="text-xl font-semibold text-primary text-center flex items-center justify-center gap-2">📅 Metas Semanales</h3>
+            <h3 className="text-xl font-semibold text-primary text-center flex items-center justify-center gap-2">
+              📅 Análisis Semanal Automático
+              {criticalWeekIdx >= 0 && (
+                <span className="text-xs bg-expense/10 text-expense px-2 py-1 rounded-full font-medium">
+                  ⚠️ Semana {criticalWeekIdx + 1} es la más crítica
+                </span>
+              )}
+            </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {data.weekly.map((week, i) => {
-                const target = targets[i] || 0;
-                const progress = target > 0 ? Math.min((week.actual / target) * 100, 100) : 0;
-                const isOver = week.actual > target && target > 0;
-                const statusColor = isOver ? "bg-expense/10 text-expense border-expense/20" : target > 0 ? "bg-income/10 text-income border-income/20" : "bg-muted/10 text-muted border-muted/20";
-                const barColor = isOver ? "bg-expense" : "bg-gradient-to-r from-income to-accent";
-                const isEditing = editingWeek === i && !isReadOnly;
-
+                const isCritical = i === criticalWeekIdx;
+                const hasActivity = week.income > 0 || week.expense > 0;
+                const isDeficit = week.balance < 0;
+                
                 return (
-                  <div key={i} className="glass rounded-2xl p-4 shadow-soft hover:scale-[1.02] transition-transform duration-300">
+                  <div 
+                    key={i} 
+                    className={`glass rounded-2xl p-4 shadow-soft transition-all duration-300 ${
+                      isCritical 
+                        ? "ring-2 ring-expense/50 scale-[1.02] bg-expense/5" 
+                        : "hover:scale-[1.02]"
+                    }`}
+                  >
                     <div className="flex justify-between items-center mb-3">
-                      <span className="text-sm font-medium text-secondary">Semana {i + 1}</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${statusColor}`}>
-                        {target === 0 ? "Sin meta" : isOver ? "⚠️ Excedido" : `${Math.round(progress)}%`}
-                      </span>
-                    </div>
-                    
-                    <div className="w-full bg-surface-light h-2.5 rounded-full overflow-hidden mb-3">
-                      <div className={`h-full rounded-full transition-all duration-700 ease-out ${barColor}`} style={{ width: `${progress}%` }} />
+                      <span className="text-sm font-semibold text-primary">Semana {i + 1}</span>
+                      {isCritical && <span className="text-xs font-medium text-expense">⚠️ Crítica</span>}
+                      {!isCritical && !hasActivity && <span className="text-xs text-muted">Sin actividad</span>}
+                      {!isCritical && hasActivity && !isDeficit && week.balance > 0 && (
+                        <span className="text-xs bg-income/10 text-income px-2 py-0.5 rounded-full font-medium">✓ Superávit</span>
+                      )}
+                      {!isCritical && hasActivity && isDeficit && (
+                        <span className="text-xs bg-expense/10 text-expense px-2 py-0.5 rounded-full font-medium">Déficit</span>
+                      )}
                     </div>
 
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-muted">Real: <span className="text-primary font-medium">{fmt(week.actual)}</span></span>
-                      <div className="flex items-center gap-1">
-                        <span className="text-muted">Meta:</span>
-                        {isEditing ? (
-                          <input autoFocus type="text" inputMode="decimal" value={tempTarget} onChange={(e) => setTempTarget(e.target.value.replace(/[^\d.,]/g, ""))} onBlur={saveTarget} onKeyDown={(e) => e.key === "Enter" && saveTarget()} className="w-20 bg-surface-light border border-accent/30 rounded px-1.5 py-0.5 text-right text-primary outline-none" />
-                        ) : (
-                          <button onClick={() => startEdit(i)} disabled={isReadOnly} className="flex items-center gap-1 text-accent hover:text-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" title={isReadOnly ? "Solo lectura" : "Editar meta"}>
-                            <span className="font-medium">{target > 0 ? fmt(target) : "$0"}</span>
-                            {!isReadOnly && <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>}
-                          </button>
-                        )}
+                    {/* Mini barras visuales */}
+                    {hasActivity && (
+                      <div className="space-y-2 mb-3">
+                        <div className="flex justify-between text-xs">
+                          <span className="text-muted">Ingresos</span>
+                          <span className="text-income font-medium">{fmt(week.income)}</span>
+                        </div>
+                        <div className="w-full bg-surface-light h-1.5 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-gradient-to-r from-income to-income/70 rounded-full transition-all duration-700"
+                            style={{ width: `${Math.min((week.income / Math.max(week.income, week.expense, 1)) * 100, 100)}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-muted">Egresos</span>
+                          <span className="text-expense font-medium">{fmt(week.expense)}</span>
+                        </div>
+                        <div className="w-full bg-surface-light h-1.5 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-gradient-to-r from-expense to-expense/70 rounded-full transition-all duration-700"
+                            style={{ width: `${Math.min((week.expense / Math.max(week.income, week.expense, 1)) * 100, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Balance final */}
+                    <div className="pt-3 border-t border-border/50">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-muted">Balance</span>
+                        <span className={`text-lg font-bold ${
+                          !hasActivity ? "text-muted" :
+                          week.balance > 0 ? "text-income" :
+                          week.balance < 0 ? "text-expense" :
+                          "text-secondary"
+                        }`}>
+                          {hasActivity ? fmt(week.balance) : "—"}
+                        </span>
                       </div>
                     </div>
                   </div>
