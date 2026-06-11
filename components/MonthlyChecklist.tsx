@@ -104,9 +104,8 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
     return () => { cancelled = true; };
   }, [year, month]);
 
-  // --- LÓGICA DUAL INTELIGENTE ---
     const calculateProgress = async (items: CheckItem[]): Promise<CheckItem[]> => {
-    console.log("🚀 [SISTEMA ACTIVO] Buscando acumulados con fechas blindadas...");
+    console.log("🚀 [SISTEMA ACTIVO] Aplicando Lógica Dual: Mensual para Ingresos, Semanal para Egresos...");
     
     const itemsWithProgress = await Promise.all(
       items.map(async (item) => {
@@ -122,13 +121,14 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
         let startDate: string;
         let endDate: string;
 
-        // 1. PARA INGRESOS: Buscamos en TODO EL MES (fechas blindadas, nunca dará 31 en junio)
+        // 1. PARA INGRESOS: Buscamos en TODO EL MES (fechas blindadas)
         if (item.type === "income") {
           const monthStr = month.toString().padStart(2, '0');
-          // Esta fórmula matemática SIEMPRE devuelve el último día real del mes (28, 29, 30 o 31)
-          const lastDay = new Date(year, month, 0).getDate(); 
+          // Fórmula infalible para obtener el último día del mes (28, 29, 30 o 31)
+          const lastDay = new Date(year, month, 0).getDate();
           startDate = `${year}-${monthStr}-01`;
           endDate = `${year}-${monthStr}-${lastDay}`;
+          console.log(`🔍 [INGRESO] Buscando "${item.title}" en TODO el mes: ${startDate} a ${endDate}`);
         } 
         // 2. PARA EGRESOS: Buscamos SOLO EN LA SEMANA ESPECÍFICA
         else {
@@ -140,9 +140,8 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
           }
           startDate = weekStartDate.toISOString().split('T')[0];
           endDate = weekEndDate.toISOString().split('T')[0];
+          console.log(`🔍 [EGRESO] Buscando "${item.title}" en la semana: ${startDate} a ${endDate}`);
         }
-
-        console.log(`🔍 Buscando "${item.title}" | Categoría: "${cleanCategory}" | Fechas: ${startDate} a ${endDate}`);
 
         const { data: transactions, error } = await supabase
           .from("transactions")
@@ -271,8 +270,15 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
   
   const totalIncome = incomes.reduce((sum, i) => sum + i.amount, 0);
   const totalExpense = expenses.reduce((sum, i) => sum + i.amount, 0);
+  
+  // CORREGIDO: El completado es la suma de los montos de los ítems totalmente completados
   const completedIncome = incomes.filter(i => i.is_completed).reduce((s, i) => s + i.amount, 0);
   const completedExp = expenses.filter(i => i.is_completed).reduce((s, i) => s + i.amount, 0);
+  
+  // CORREGIDO: El pendiente es la suma de lo que FALTA por pagar/cobrar de los ítems NO completados
+  const pendingIncome = incomes.filter(i => !i.is_completed).reduce((s, i) => s + (i.amount - (i.paid_amount || 0)), 0);
+  const pendingExp = expenses.filter(i => !i.is_completed).reduce((s, i) => s + (i.amount - (i.paid_amount || 0)), 0);
+
   const progress = totalExpense > 0 ? Math.round((completedExp / totalExpense) * 100) : 0;
 
   const filteredCategories = categories;
@@ -325,7 +331,11 @@ export default function MonthlyChecklist({ year, month, isReadOnly = false }: Pr
           <div className="glass rounded-xl p-4 space-y-2">
             <div className="flex justify-between text-sm"><span className="text-secondary">Progreso de pagos (egresos)</span><span className="font-medium text-primary">{progress}%</span></div>
             <div className="w-full bg-surface-light h-2 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-income to-accent transition-all duration-500" style={{ width: `${progress}%` }} /></div>
-            <div className="flex justify-between text-xs text-muted"><span>Pendiente: {fmt(totalExpense - completedExp)}</span><span>Completado: {fmt(completedExp)}</span></div>
+            {/* CORREGIDO: Ahora muestra el pendiente real (restando los abonos parciales) */}
+            <div className="flex justify-between text-xs text-muted">
+              <span>Pendiente: {fmt(pendingExp)}</span>
+              <span>Completado: {fmt(completedExp)}</span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

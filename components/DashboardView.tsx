@@ -12,7 +12,10 @@ interface DashboardProps {
     income: number;
     expense: number;
     available: number;
-    weekly: { income: number; expense: number; previousBalance: number; balance: number }[];
+    accountBalances: { Davivienda: number; Nequi: number; Daviplata: number; Otros: number };
+    incomeByAccount: { Davivienda: number; Nequi: number; Daviplata: number; Otros: number };
+    expenseByAccount: { Davivienda: number; Nequi: number; Daviplata: number; Otros: number };
+    weekly: { income: number; expense: number; balance: number }[];
     isLoading: boolean;
     transactions: { date: string; category: string; type: string; amount: number; icon: string }[];
   };
@@ -21,9 +24,50 @@ interface DashboardProps {
   isReadOnly?: boolean;
 }
 
+const ACCOUNTS_LIST = ["Davivienda", "Nequi", "Daviplata", "Otros"] as const;
+const ACCOUNT_ICONS: Record<string, string> = {
+  Davivienda: "🏦",
+  Nequi: "💜",
+  Daviplata: "🔴",
+  Otros: "📁"
+};
+
+// Componente reutilizable para el desglose simétrico
+const AccountBreakdown = ({ 
+  data, 
+  type 
+}: { 
+  data: { Davivienda: number; Nequi: number; Daviplata: number; Otros: number }, 
+  type: 'income' | 'expense' | 'balance' 
+}) => {
+  const fmt = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n);
+  
+  const colorClass = type === 'income' ? 'text-income' : type === 'expense' ? 'text-expense' : 'text-primary';
+
+  return (
+    <div className="space-y-2 mb-3 flex-grow">
+      {ACCOUNTS_LIST.map((acc) => {
+        const value = data[acc];
+        if (value === 0 && acc === "Otros") return null; // Ocultar "Otros" si es 0
+        
+        return (
+          <div key={acc} className="flex justify-between items-center text-sm border-b border-border/30 pb-1 last:border-0">
+            <span className="text-muted flex items-center gap-1.5">
+              <span>{ACCOUNT_ICONS[acc]}</span>
+              {acc}
+            </span>
+            <span className={`font-semibold ${colorClass}`}>
+              {fmt(value)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 export default function DashboardView({ month, year, data, onRefresh, lastSynced, isReadOnly = false }: DashboardProps) {
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
-
   const fmt = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n);
   const months = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 
@@ -41,7 +85,6 @@ export default function DashboardView({ month, year, data, onRefresh, lastSynced
       const blob = await pdf(
         <PDFReport title={`${months[month]} ${year}`} income={data.income} expense={data.expense} transactions={data.transactions} />
       ).toBlob();
-      
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -59,18 +102,15 @@ export default function DashboardView({ month, year, data, onRefresh, lastSynced
 
   const getCriticalWeek = () => {
     if (data.weekly.length === 0) return -1;
-    const weekWithActivity = data.weekly.map((w, i) => ({ ...w, idx: i })).filter(w => w.income > 0 || w.expense > 0 || w.previousBalance !== 0);
+    const weekWithActivity = data.weekly.map((w, i) => ({ ...w, idx: i })).filter(w => w.income > 0 || w.expense > 0);
     if (weekWithActivity.length === 0) return -1;
 
     const lowestBalance = Math.min(...weekWithActivity.map(w => w.balance));
     const criticalByBalance = weekWithActivity.filter(w => w.balance === lowestBalance);
-    if (lowestBalance < 0 || criticalByBalance.length > 0) {
-      return criticalByBalance[0].idx;
-    }
+    if (lowestBalance < 0 || criticalByBalance.length > 0) return criticalByBalance[0].idx;
 
     const highestExpense = Math.max(...weekWithActivity.map(w => w.expense));
-    const criticalByExpense = weekWithActivity.filter(w => w.expense === highestExpense);
-    return criticalByExpense[0].idx;
+    return weekWithActivity.find(w => w.expense === highestExpense)?.idx ?? -1;
   };
 
   const criticalWeekIdx = getCriticalWeek();
@@ -119,20 +159,56 @@ export default function DashboardView({ month, year, data, onRefresh, lastSynced
         <>
           <SmartAlerts year={year} month={month} />
 
+          {/* TARJETAS PRINCIPALES SIMÉTRICAS */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {[
-              { label: "Ingresos", value: data.income, colorClass: "text-income", icon: "📈" },
-              { label: "Egresos", value: data.expense, colorClass: "text-expense", icon: "📉" },
-              { label: "Disponible", value: data.available, colorClass: data.available >= 0 ? "text-accent" : "text-expense", icon: "💎" },
-            ].map((card, i) => (
-              <div key={i} className="glass rounded-2xl p-5 shadow-soft hover:-translate-y-1 transition-all duration-300 cursor-default group">
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="text-2xl group-hover:scale-110 transition-transform duration-300">{card.icon}</span>
-                  <span className="text-sm font-medium text-secondary uppercase tracking-wider">{card.label}</span>
-                </div>
-                <p className={`text-2xl sm:text-3xl font-bold ${card.colorClass}`}>{fmt(card.value)}</p>
+            
+            {/* 1. INGRESOS */}
+            <div className="glass rounded-2xl p-5 shadow-soft hover:-translate-y-1 transition-all duration-300 cursor-default group flex flex-col">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-2xl group-hover:scale-110 transition-transform duration-300">📈</span>
+                <span className="text-sm font-medium text-secondary uppercase tracking-wider">Ingresos</span>
               </div>
-            ))}
+              <AccountBreakdown data={data.incomeByAccount} type="income" />
+              <div className="pt-3 border-t border-border/50 mt-auto">
+                <div className="flex justify-between items-end">
+                  <span className="text-xs font-medium text-secondary uppercase">Total Ingresos</span>
+                  <p className="text-2xl sm:text-3xl font-bold text-income">{fmt(data.income)}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. EGRESOS */}
+            <div className="glass rounded-2xl p-5 shadow-soft hover:-translate-y-1 transition-all duration-300 cursor-default group flex flex-col">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-2xl group-hover:scale-110 transition-transform duration-300">📉</span>
+                <span className="text-sm font-medium text-secondary uppercase tracking-wider">Egresos</span>
+              </div>
+              <AccountBreakdown data={data.expenseByAccount} type="expense" />
+              <div className="pt-3 border-t border-border/50 mt-auto">
+                <div className="flex justify-between items-end">
+                  <span className="text-xs font-medium text-secondary uppercase">Total Egresos</span>
+                  <p className="text-2xl sm:text-3xl font-bold text-expense">{fmt(data.expense)}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. DISPONIBLE */}
+            <div className="glass rounded-2xl p-5 shadow-soft hover:-translate-y-1 transition-all duration-300 cursor-default group flex flex-col">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-2xl group-hover:scale-110 transition-transform duration-300">💎</span>
+                <span className="text-sm font-medium text-secondary uppercase tracking-wider">Disponible</span>
+              </div>
+              <AccountBreakdown data={data.accountBalances} type="balance" />
+              <div className="pt-3 border-t border-border/50 mt-auto">
+                <div className="flex justify-between items-end">
+                  <span className="text-xs font-medium text-secondary uppercase">Saldo Total</span>
+                  <p className={`text-2xl sm:text-3xl font-bold ${data.available >= 0 ? "text-accent" : "text-expense"}`}>
+                    {fmt(data.available)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
           </div>
 
           <WeeklyChart weeklyData={data.weekly.map(w => ({ target: 0, actual: w.expense }))} fmt={fmt} />
@@ -149,7 +225,7 @@ export default function DashboardView({ month, year, data, onRefresh, lastSynced
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {data.weekly.map((week, i) => {
                 const isCritical = i === criticalWeekIdx;
-                const hasActivity = week.income > 0 || week.expense > 0 || week.previousBalance !== 0;
+                const hasActivity = week.income > 0 || week.expense > 0;
                 const isDeficit = week.balance < 0;
                 
                 return (
@@ -173,14 +249,6 @@ export default function DashboardView({ month, year, data, onRefresh, lastSynced
 
                     {hasActivity && (
                       <div className="space-y-2 mb-3 text-xs">
-                        {/* NUEVO: Mostrar arrastre si existe */}
-                        {week.previousBalance !== 0 && (
-                          <div className="flex justify-between text-muted/80 border-b border-border/30 pb-1 mb-1">
-                            <span>Arrastre (Disponible):</span>
-                            <span className="font-medium text-primary">{fmt(week.previousBalance)}</span>
-                          </div>
-                        )}
-                        
                         <div className="flex justify-between">
                           <span className="text-muted">Ingresos:</span>
                           <span className="text-income font-medium">{fmt(week.income)}</span>

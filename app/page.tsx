@@ -16,6 +16,9 @@ import MobileBottomNav from "@/components/MobileBottomNav";
 
 interface CategoryItem { name: string; icon?: string; }
 
+const ACCOUNTS = ["Davivienda", "Nequi", "Daviplata"] as const;
+type AccountType = typeof ACCOUNTS[number];
+
 export default function Home() {
   const [view, setView] = useState<"form" | "dashboard" | "checklist" | "history">("form");
   
@@ -30,7 +33,8 @@ export default function Home() {
   const [selectedType, setSelectedType] = useState<"income" | "expense" | null>(null);
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
-  
+  const [selectedAccount, setSelectedAccount] = useState<AccountType>("Davivienda");
+
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [selectedCategory, setSelectedCategory] = useState("");
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
@@ -39,12 +43,14 @@ export default function Home() {
 
   const [feedback, setFeedback] = useState<{ type: "success" | "error" | null, msg: string }>({ type: null, msg: "" });
 
-  // NUEVO: Agregamos previousBalance a la interfaz
   const [dashboardData, setDashboardData] = useState({
     income: 0, 
     expense: 0, 
     available: 0, 
-    weekly: [] as { income: number; expense: number; previousBalance: number; balance: number }[], 
+    accountBalances: { Davivienda: 0, Nequi: 0, Daviplata: 0, Otros: 0 },
+    incomeByAccount: { Davivienda: 0, Nequi: 0, Daviplata: 0, Otros: 0 },
+    expenseByAccount: { Davivienda: 0, Nequi: 0, Daviplata: 0, Otros: 0 },
+    weekly: [] as { income: number; expense: number; balance: number }[], 
     isLoading: false, 
     transactions: [] as any[]
   });
@@ -52,19 +58,21 @@ export default function Home() {
 
   const fetchDashboardData = useCallback(async () => {
     setDashboardData(prev => ({ ...prev, isLoading: true }));
-    const { data: txData, error: txError } = await supabase.from("transactions").select("type, amount, date, category").order("date", { ascending: true });
+    const { data: txData, error: txError } = await supabase.from("transactions").select("type, amount, date, category, account").order("date", { ascending: true });
     if (txError) { console.error("Error cargando transacciones:", txError); setDashboardData(prev => ({ ...prev, isLoading: false })); return; }
 
     let income = 0, expense = 0;
-    
-    // NUEVO: Estructura con previousBalance
     const weeklyStats = [
-      { income: 0, expense: 0, previousBalance: 0, balance: 0 },
-      { income: 0, expense: 0, previousBalance: 0, balance: 0 },
-      { income: 0, expense: 0, previousBalance: 0, balance: 0 },
-      { income: 0, expense: 0, previousBalance: 0, balance: 0 }
+      { income: 0, expense: 0, balance: 0 },
+      { income: 0, expense: 0, balance: 0 },
+      { income: 0, expense: 0, balance: 0 },
+      { income: 0, expense: 0, balance: 0 }
     ];
     
+    const netBalances = { Davivienda: 0, Nequi: 0, Daviplata: 0, Otros: 0 };
+    const incomeByAcc = { Davivienda: 0, Nequi: 0, Daviplata: 0, Otros: 0 };
+    const expenseByAcc = { Davivienda: 0, Nequi: 0, Daviplata: 0, Otros: 0 };
+
     const monthlyTx = (txData || []).filter(tx => {
       const txDate = new Date(tx.date + "T00:00:00");
       return txDate.getFullYear() === activeYear && txDate.getMonth() + 1 === activeMonth;
@@ -75,28 +83,40 @@ export default function Home() {
 
     monthlyTx.forEach((tx) => {
       const amt = Number(tx.amount);
-      if (tx.type === "income") income += amt; 
-      else expense += amt;
+      const accountName = tx.account && ACCOUNTS.includes(tx.account as AccountType) ? tx.account : "Otros";
       
-      const day = new Date(tx.date + "T00:00:00").getDate();
-      const weekIdx = Math.min(Math.floor((day - 1) / 7), 3);
-      
-      if (tx.type === "income") weeklyStats[weekIdx].income += amt;
-      else weeklyStats[weekIdx].expense += amt;
+      if (tx.type === "income") {
+        income += amt;
+        incomeByAcc[accountName as keyof typeof incomeByAcc] += amt;
+        netBalances[accountName as keyof typeof netBalances] += amt;
+        
+        const day = new Date(tx.date + "T00:00:00").getDate();
+        const weekIdx = Math.min(Math.floor((day - 1) / 7), 3);
+        weeklyStats[weekIdx].income += amt;
+      } else {
+        expense += amt;
+        expenseByAcc[accountName as keyof typeof expenseByAcc] += amt;
+        netBalances[accountName as keyof typeof netBalances] -= amt;
+        
+        const day = new Date(tx.date + "T00:00:00").getDate();
+        const weekIdx = Math.min(Math.floor((day - 1) / 7), 3);
+        weeklyStats[weekIdx].expense += amt;
+      }
     });
 
-    // NUEVO: Cálculo acumulativo transparente
     let runningBalance = 0;
     weeklyStats.forEach(week => {
-      week.previousBalance = runningBalance; // Guardamos el arrastre ANTES de sumar/restar esta semana
       runningBalance += (week.income - week.expense);
-      week.balance = runningBalance; // Este es el nuevo disponible
+      week.balance = runningBalance;
     });
 
     setDashboardData({ 
       income, 
       expense, 
       available: income - expense, 
+      accountBalances: netBalances,
+      incomeByAccount: incomeByAcc,
+      expenseByAccount: expenseByAcc,
       weekly: weeklyStats, 
       isLoading: false, 
       transactions: monthlyTx 
@@ -143,7 +163,15 @@ export default function Home() {
     if (!date) { setFeedback({ type: "error", msg: "Selecciona fecha" }); return; }
 
     setIsSaving(true); setFeedback({ type: null, msg: "" });
-    const { error } = await supabase.from("transactions").insert({ type: selectedType, category: selectedCategory, amount: numericAmount, date });
+    
+    const { error } = await supabase.from("transactions").insert({ 
+      type: selectedType, 
+      category: selectedCategory, 
+      amount: numericAmount, 
+      date,
+      account: selectedAccount 
+    });
+    
     setIsSaving(false);
     if (error) { setFeedback({ type: "error", msg: "Error: " + error.message }); }
     else {
@@ -191,6 +219,31 @@ export default function Home() {
           <div className="flex flex-col items-center gap-6 w-full">
             <TransactionTypeSelector value={selectedType} onChange={setSelectedType} disabled={isReadOnly} />
             <AmountDateInputs amount={amount} date={date} onAmountChange={setAmount} onDateChange={setDate} disabled={isReadOnly} />
+            
+            <div className="w-full max-w-md mx-auto space-y-2">
+              <label className="text-sm font-medium text-secondary ml-1">¿En qué cuenta?</label>
+              <div className="grid grid-cols-3 gap-2">
+                {ACCOUNTS.map((acc) => (
+                  <button
+                    key={acc}
+                    type="button"
+                    onClick={() => setSelectedAccount(acc)}
+                    disabled={isReadOnly}
+                    className={`py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                      selectedAccount === acc 
+                        ? "bg-accent/10 border-accent text-accent" 
+                        : "bg-surface-light border-border text-secondary hover:bg-surface"
+                    } disabled:opacity-50`}
+                  >
+                    {acc === "Davivienda" && "🏦 "}
+                    {acc === "Nequi" && "💜 "}
+                    {acc === "Daviplata" && "🔴 "}
+                    {acc}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="w-full max-w-md mx-auto">
               <CategorySelector value={selectedCategory} categories={categories} onChange={setSelectedCategory} onAddNew={() => setIsCategoryModalOpen(true)} onDelete={handleDeleteCategory} isReadOnly={isReadOnly} />
               {isLoadingCategories && <p className="text-xs text-muted mt-1.5 text-center animate-pulse">Sincronizando...</p>}
