@@ -2,19 +2,19 @@ import { MetadataRoute } from 'next'
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Mis Finanzas', // Nombre completo de la app
-    short_name: 'Finanzas', // Nombre corto para el icono del celular
-    description: 'Control inteligente de mis ingresos y egresos',
+    name: 'Control Financiero',
+    short_name: 'Finanzas',
+    description: 'Bitácora de ingresos y gastos mensual',
     start_url: '/',
-    display: 'standalone', // Esto es CLAVE: quita la barra del navegador y lo hace parecer app
-    background_color: '#ffffff', // Color de fondo al abrir la app
-    theme_color: '#000000', // Color de la barra de estado del celular
+    display: 'standalone',
+    background_color: '#000000',
+    theme_color: '#000000',
     icons: [
       {
         src: '/icon.png',
         sizes: '512x512',
         type: 'image/png',
-      },
+      }
     ],
   }
 }
